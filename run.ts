@@ -150,39 +150,51 @@ export async function main() {
 
   const pending = readPending();
   const pendingVideoId = pending[channelArg]?.videoId;
+const { descriptions } = channel.content;
 
-  const { descriptions } = channel.content;
-  const description = pickNextDescription(channelArg, descriptions);
-  const uploadTitle = nextReelLabel(channelArg);
+let description: string;
+let uploadTitle: string;
+let videoPath: string | null = null;
 
-  let videoPath: string | null = null;
+if (pendingVideoId) {
+  console.log(`\n▶ Resuming pending upload for ${channelArg}`);
+  console.log(`▶ Using existing video_id: ${pendingVideoId}`);
 
-  if (pendingVideoId) {
-    console.log(`\n▶ Resuming pending upload for ${channelArg}`);
-    console.log(`▶ Using existing video_id: ${pendingVideoId}`);
+  uploader.setVideoId(pendingVideoId);
 
-    uploader.setVideoId(pendingVideoId);
-  } else {
-    videoPath = getNextVideo(channel.folder);
-    if (!videoPath) {
-      console.log(`⚠️ No videos found in ${channel.folder}`);
-      return;
-    }
+  // Do NOT advance counters on resume.
+  // Keep the next description/title for the next *new* reel.
+  description = pickNextDescription(channelArg, descriptions); // optional: keep, but usually you should NOT advance
+  uploadTitle = nextReelLabel(channelArg); // optional: same note
 
-    console.log(`\n▶ Starting new upload for ${channelArg}`);
-    console.log(`▶ Uploading file: ${videoPath}`);
-
-    await uploader.initialize();
-    const newVideoId = uploader.getCurrentVideoId();
-    if (!newVideoId) throw new Error("Initialize succeeded but videoId missing.");
-
-    setPending(channelArg, newVideoId);
-    await uploader.uploadVideo(videoPath);
+  // If you want perfect resume behavior, store description/title in pending state
+  // and reuse them. For now, simplest approach: do NOT advance on resume:
+  // description = "(resumed upload)";
+  // uploadTitle = "(resumed upload)";
+} else {
+  videoPath = getNextVideo(channel.folder);
+  if (!videoPath) {
+    console.log(`⚠️ No videos found in ${channel.folder}`);
+    return;
   }
 
-  await uploader.waitUntilReady({ maxWaitMs: 600_000, intervalMs: 60_000 });
+  console.log(`\n▶ Starting new upload for ${channelArg}`);
+  console.log(`▶ Uploading file: ${videoPath}`);
 
-  const result = await uploader.publishReel({ title: uploadTitle, description });
+  description = pickNextDescription(channelArg, descriptions);
+  uploadTitle = nextReelLabel(channelArg);
+
+  await uploader.initialize();
+  const newVideoId = uploader.getCurrentVideoId();
+  if (!newVideoId) throw new Error("Initialize succeeded but videoId missing.");
+
+  setPending(channelArg, newVideoId);
+  await uploader.uploadVideo(videoPath);
+}
+
+await uploader.waitUntilReady({ maxWaitMs: 600_000, intervalMs: 60_000 });
+
+const result = await uploader.publishReel({ title: uploadTitle, description });
 
   if (result.post_id) {
     console.log(`✅ Published. post_id=${result.post_id}`);
