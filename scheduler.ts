@@ -1,4 +1,4 @@
-process.env.TZ = "Asia/Manila";  // <-- CRITICAL
+process.env.TZ = "Asia/Manila";
 
 import fs from "fs";
 import path from "path";
@@ -29,7 +29,7 @@ function isPostingHour(hour: number) {
 }
 
 function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function main() {
@@ -44,7 +44,6 @@ async function main() {
   if (counters.date !== today) {
     counters = { date: today, channel1: 0, channel2: 0 };
     saveCounters(counters);
-    console.log("New day → counters reset.");
   }
 
   if (!isPostingHour(hour)) {
@@ -68,14 +67,4 @@ async function main() {
   }
 }
 
-async function loop() {
-  while (true) {
-    await main();
-    await sleep(60 * 1000); // check every minute
-  }
-}
-
-loop().catch(err => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+main().catch(err => console.error("Fatal:", err));
