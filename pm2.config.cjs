@@ -7,11 +7,10 @@ module.exports = {
       script: "scheduler.ts",
       interpreter: "npx",
       interpreterArgs: "ts-node",
-      cron_restart: "0 * * * *",
-      timezone: TZ_PHILIPPINES,
-      watch: false,
-      autorestart: true,
-      max_restarts: 5
+      env: {
+        TZ: TZ_PHILIPPINES
+      },
+      watch: false
     }
   ]
 };
