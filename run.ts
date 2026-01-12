@@ -1,10 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ReelUpload } from "./ReelUpload.ts";
-import * as dotenv from 'dotenv';
-
-// Load the environment variables from .env file
+import { ReelUpload } from "./ReelUpload";
+import dotenv from "dotenv";
 dotenv.config();
+
 const CONTENT_FILE = path.resolve("content.json");
 
 type ChannelKey = "channel1" | "channel2";
@@ -55,7 +54,7 @@ function readPending(): PendingShape {
 }
 
 function writePending(pending: PendingShape) {
-  fs.writeFileSync(PENDING_FILE, JSON.stringify(pending, null, 2), "utf8");
+  fs.writeFileSync(PENDING_FILE, JSON.stringify(pending, null, 2));
 }
 
 function clearPending(channelKey: ChannelKey) {
@@ -138,7 +137,7 @@ export async function main() {
     console.log("Usage:");
     console.log("  npx ts-node run.ts channel1");
     console.log("  npx ts-node run.ts channel2");
-    process.exit(1);
+    return;
   }
 
   const channel = CHANNELS[channelArg];
@@ -177,39 +176,30 @@ export async function main() {
     const newVideoId = uploader.getCurrentVideoId();
     if (!newVideoId) throw new Error("Initialize succeeded but videoId missing.");
 
-    // Save pending immediately so crashes can resume
     setPending(channelArg, newVideoId);
-
     await uploader.uploadVideo(videoPath);
   }
 
-  // Soft wait: poll every 2 minutes for up to 10 minutes, then publish anyway
   await uploader.waitUntilReady({ maxWaitMs: 600_000, intervalMs: 60_000 });
 
   const result = await uploader.publishReel({ title: uploadTitle, description });
 
-  // If publish returns post_id, we consider it "done"
   if (result.post_id) {
     console.log(`✅ Published. post_id=${result.post_id}`);
     clearPending(channelArg);
 
-    // Only rename file if this run actually uploaded a file path
     if (videoPath) {
       const dir = path.dirname(videoPath);
       const base = path.basename(videoPath);
       const dest = path.join(dir, `doneandsent_${base}`);
       fs.renameSync(videoPath, dest);
       console.log(`✅ Renamed to ${dest}\n`);
-    } else {
-      console.log("✅ Resume publish complete. No local file rename (this run did not upload a file).\n");
     }
 
     return;
   }
 
-  // No post_id — keep pending so you can re-run to attempt finish again
-  console.warn("⚠️ Publish call succeeded but post_id missing. Keeping pending video_id for retry.");
-  console.warn("Re-run the script for the same channel to retry publish.\n");
+  console.warn("⚠️ Publish succeeded but no post_id. Keeping pending ID.\n");
 }
 
 if (require.main === module) {

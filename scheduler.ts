@@ -1,13 +1,14 @@
 import fs from "fs";
 import path from "path";
-import { main as runInternal } from "./run.ts";
+import { main as runInternal } from "./run";
 
+// CommonJS already has __dirname
 const COUNTER_FILE = path.join(__dirname, "daily_counters.json");
 
 export async function postOneReel(channel: "channel1" | "channel2") {
   console.log(`\n=== Starting post for ${channel} ===`);
-  
-  // Simulate CLI argument for the code inside run.ts
+
+  // Simulate CLI argument so run.ts works the same way
   process.argv[2] = channel;
 
   await runInternal();
@@ -27,11 +28,11 @@ function saveCounters(counters: any) {
 }
 
 function isPostingHour(hour: number): boolean {
-  return hour >= 8 && hour <= 19; // 8am → 7pm = 12 posts
+  return hour >= 8 && hour <= 19; // 8am–7pm
 }
 
 function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function main() {
@@ -43,7 +44,7 @@ async function main() {
 
   let counters = loadCounters();
 
-  // Reset new day
+  // Reset daily counters
   if (counters.date !== today) {
     counters = { date: today, channel1: 0, channel2: 0 };
     saveCounters(counters);
@@ -55,9 +56,9 @@ async function main() {
     return;
   }
 
-  // ------------------------
-  // CHANNEL 1 POST
-  // ------------------------
+  // -------------------------
+  // CHANNEL 1
+  // -------------------------
   if (counters.channel1 < 12) {
     console.log(`Posting channel1 (#${counters.channel1 + 1})`);
     await postOneReel("channel1");
@@ -67,13 +68,13 @@ async function main() {
     console.log("Channel1 quota reached.");
   }
 
-  // Wait 10 minutes between channels
+  // Wait 10 minutes
   console.log("Waiting 10 minutes before posting channel2…");
   await sleep(10 * 60 * 1000);
 
-  // ------------------------
-  // CHANNEL 2 POST
-  // ------------------------
+  // -------------------------
+  // CHANNEL 2
+  // -------------------------
   if (counters.channel2 < 12) {
     console.log(`Posting channel2 (#${counters.channel2 + 1})`);
     await postOneReel("channel2");

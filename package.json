@@ -1,6 +1,5 @@
 {
-  "type": "module",
-  "scripts": {
+    "scripts": {
     "dev": "ts-node send.ts",
     "build": "tsc",
     "start": "node dist/send.js"
