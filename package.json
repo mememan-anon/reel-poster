@@ -1,0 +1,17 @@
+{
+  "type": "module",
+  "scripts": {
+    "dev": "ts-node send.ts",
+    "build": "tsc",
+    "start": "node dist/send.js"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pm2": "^6.0.14"
+  }
+}
