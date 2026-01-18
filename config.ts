@@ -1,0 +1,1 @@
+export const MAX_REELS=6

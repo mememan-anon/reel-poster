@@ -3,6 +3,7 @@ process.env.TZ = "Asia/Manila";
 import fs from "fs";
 import path from "path";
 import { main as runInternal } from "./run";
+import { MAX_REELS } from "./config";
 
 const TZ_PHILIPPINES = "Asia/Manila";
 const COUNTER_FILE = path.join(__dirname, "daily_counters.json");
@@ -31,7 +32,8 @@ function saveCounters(counters: any) {
 }
 
 function isPostingHour(hour: number) {
-  return hour >= 8 && hour <= 19;
+  //return hour >= 8 && hour <= 19; --posting every hour
+  return hour >= 8 && hour <= 18 && hour % 2 === 0; // posting every 2 hours
 }
 
 function sleep(ms: number) {
@@ -111,11 +113,11 @@ async function main() {
   }
 
   if (!isPostingHour(hour)) {
-    console.log(`Outside posting hours (08–19 Manila). Skipping.`);
+    console.log(`Outside posting hours in Manila.Skipping.`);
     return;
   }
 
-  if (counters.channel1 < 12) {
+  if (counters.channel1 < MAX_REELS) {
     await postOneReel("channel1");
     counters.channel1++;
     saveCounters(counters);
@@ -136,7 +138,7 @@ async function main() {
     return;
   }
 
-  if (counters.channel2 < 12) {
+  if (counters.channel2 < MAX_REELS) {
     await postOneReel("channel2");
     counters.channel2++;
     saveCounters(counters);
