@@ -1,30 +1,33 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ReelUpload } from "./ReelUpload";
 import dotenv from "dotenv";
+import { ReelUpload } from "./ReelUpload";
+import { PhotoUpload } from "./photoUpload";
+
 dotenv.config();
 
 const CONTENT_FILE = path.resolve("content.json");
+const STATE_FILE = path.resolve(".state.json");
+const PENDING_FILE = path.resolve(".pending-uploads.json");
 
-type ChannelKey = "channel1" | "channel2";
+
+type ChannelKey = "petsPage" | "comedyPage" | "coreMemes" | "petMemes" | "coupleMemes";
+type ChannelKind = "reel" | "photo";
 
 type ChannelContent = {
   title: string;
   descriptions: readonly string[];
 };
 
-type ContentShape = Record<ChannelKey, ChannelContent>;
+type ContentShape = Partial<Record<ChannelKey, ChannelContent>>;
 
 function loadContent(): ContentShape {
-  if (!fs.existsSync(CONTENT_FILE)) throw new Error(`Missing content.json at ${CONTENT_FILE}`);
+  if (!fs.existsSync(CONTENT_FILE)) return {};
   const raw = fs.readFileSync(CONTENT_FILE, "utf8");
   return JSON.parse(raw) as ContentShape;
 }
 
 const content = loadContent();
-
-const STATE_FILE = path.resolve(".state.json");
-const PENDING_FILE = path.resolve(".pending-uploads.json");
 
 type StateEntry = { descIndex: number; reelCounter: number };
 type StateShape = Partial<Record<ChannelKey, StateEntry>>;
@@ -69,6 +72,10 @@ function setPending(channelKey: ChannelKey, videoId: string) {
   writePending(pending);
 }
 
+function ensureDir(dir: string) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
 function pickNextDescription(channelKey: ChannelKey, descriptions: readonly string[]): string {
   if (descriptions.length === 0) throw new Error(`No descriptions configured for ${channelKey}`);
 
@@ -92,30 +99,8 @@ function nextReelLabel(channelKey: ChannelKey): string {
   state[channelKey] = { ...prev, reelCounter: current + 1 };
   writeState(state);
 
-  const prefix = channelKey === "channel1" ? "pets" : "standup";
+  const prefix = channelKey === "petsPage" ? "pets" : "standup";
   return `${prefix}-reel-${String(current).padStart(3, "0")}-facebook`;
-}
-
-const CHANNELS: Record<
-  ChannelKey,
-  { pageId: string; accessToken: string; folder: string; content: ChannelContent }
-> = {
-  channel1: {
-    pageId: process.env.PAGE_ID_1!,
-    accessToken: process.env.PAGE_TOKEN_1!,
-    folder: "/home/mememan/pets",
-    content: content.channel1,
-  },
-  channel2: {
-    pageId: process.env.PAGE_ID_2!,
-    accessToken: process.env.PAGE_TOKEN_2!,
-    folder: "/home/mememan/comedy-shows",
-    content: content.channel2,
-  },
-};
-
-function ensureDir(dir: string) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 function getNextVideo(folder: string): string | null {
@@ -129,19 +114,119 @@ function getNextVideo(folder: string): string | null {
   return files.length ? path.join(folder, files[0]) : null;
 }
 
+function getNextPhoto(folder: string): string | null {
+  if (!fs.existsSync(folder)) return null;
+
+  const files = fs
+    .readdirSync(folder)
+    .filter((f) => /\.(jpg|jpeg|png)$/i.test(f) && !f.startsWith("doneandsent_"))
+    .sort();
+
+  return files.length ? path.join(folder, files[0]) : null;
+}
+
+function markDone(filePath: string) {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const dest = path.join(dir, `doneandsent_${base}`);
+  fs.renameSync(filePath, dest);
+  console.log(`✅ Renamed to ${dest}\n`);
+}
+
+const CHANNELS: Record<
+  ChannelKey,
+  {
+    kind: ChannelKind;
+    pageId: string;
+    accessToken: string;
+    folder: string;
+    content?: ChannelContent;
+  }
+> = {
+  // REELS
+  petsPage: {
+    kind: "reel",
+    pageId: process.env.PAGE_ID_1!,
+    accessToken: process.env.PAGE_TOKEN_1!,
+    folder: "/home/mememan/pets",
+    content: content.petsPage,
+  },
+  comedyPage: {
+    kind: "reel",
+    pageId: process.env.PAGE_ID_2!,
+    accessToken: process.env.PAGE_TOKEN_2!,
+    folder: "/home/mememan/comedy-shows",
+    content: content.comedyPage,
+  },
+  // PHOTOS
+  coreMemes: {
+    kind: "photo",
+    pageId: process.env.PAGE_ID_3!,
+    accessToken: process.env.PAGE_TOKEN_3!,
+    folder: "/home/mememan/memes/core-memes",
+  },
+  petMemes: {
+    kind: "photo",
+    pageId: process.env.PAGE_ID_4!,
+    accessToken: process.env.PAGE_TOKEN_4!,
+    folder: "/home/mememan/memes/animal-memes",
+  },
+  coupleMemes: {
+    kind: "photo",
+    pageId: process.env.PAGE_ID_5!,
+    accessToken: process.env.PAGE_TOKEN_5!,
+    folder: "/home/mememan/memes/relationship-memes",
+  },
+};
+
 export async function main() {
   const channelArg = process.argv[2] as ChannelKey;
 
   if (!channelArg || !CHANNELS[channelArg]) {
     console.error("Invalid channel.");
     console.log("Usage:");
-    console.log("  npx ts-node run.ts channel1");
-    console.log("  npx ts-node run.ts channel2");
+    console.log("  npx ts-node run.ts petsPage   # reels");
+    console.log("  npx ts-node run.ts comedyPage   # reels");
+    console.log("  npx ts-node run.ts coreMemes      # photos");
+    console.log("  npx ts-node run.ts petMemes      # photos");
+    console.log("  npx ts-node run.ts coupleMemes       # photos");
     return;
   }
 
   const channel = CHANNELS[channelArg];
   ensureDir(channel.folder);
+
+  if (channel.kind === "photo") {
+    const photoPath = getNextPhoto(channel.folder);
+    if (!photoPath) {
+      console.log(`⚠️ No photos found in ${channel.folder}`);
+      return;
+    }
+
+    console.log(`\n▶ Uploading PHOTO for ${channelArg}`);
+    console.log(`▶ Uploading file: ${photoPath}`);
+
+    const uploader = new PhotoUpload({
+      accessToken: channel.accessToken,
+      pageId: channel.pageId,
+    });
+
+    // Always one photo at a go; no caption/description unless you pass it (we don't).
+    const result = await uploader.uploadPhoto({ photoFile: photoPath, publish: true });
+
+    if (result.post_id || result.id) {
+      console.log(`✅ Photo uploaded. post_id=${result.post_id ?? "N/A"} photo_id=${result.id ?? "N/A"}`);
+      markDone(photoPath);
+      return;
+    }
+
+    console.warn("⚠️ Upload succeeded but no post_id/id returned. Not renaming.\n");
+    return;
+  }
+
+  // REELS
+  if (!channel.content) throw new Error(`Missing content for ${channelArg} in content.json`);
+  const { descriptions } = channel.content;
 
   const uploader = new ReelUpload({
     accessToken: channel.accessToken,
@@ -150,68 +235,53 @@ export async function main() {
 
   const pending = readPending();
   const pendingVideoId = pending[channelArg]?.videoId;
-const { descriptions } = channel.content;
 
-let description: string;
-let uploadTitle: string;
-let videoPath: string | null = null;
+  let description: string;
+  let uploadTitle: string;
+  let videoPath: string | null = null;
 
-if (pendingVideoId) {
-  console.log(`\n▶ Resuming pending upload for ${channelArg}`);
-  console.log(`▶ Using existing video_id: ${pendingVideoId}`);
+  if (pendingVideoId) {
+    console.log(`\n▶ Resuming pending REEL upload for ${channelArg}`);
+    console.log(`▶ Using existing video_id: ${pendingVideoId}`);
 
-  uploader.setVideoId(pendingVideoId);
+    uploader.setVideoId(pendingVideoId);
 
-  // Do NOT advance counters on resume.
-  // Keep the next description/title for the next *new* reel.
-  description = pickNextDescription(channelArg, descriptions); // optional: keep, but usually you should NOT advance
-  uploadTitle = nextReelLabel(channelArg); // optional: same note
-
-  // If you want perfect resume behavior, store description/title in pending state
-  // and reuse them. For now, simplest approach: do NOT advance on resume:
-  // description = "(resumed upload)";
-  // uploadTitle = "(resumed upload)";
-} else {
-  videoPath = getNextVideo(channel.folder);
-  if (!videoPath) {
-    console.log(`⚠️ No videos found in ${channel.folder}`);
-    return;
-  }
-
-  console.log(`\n▶ Starting new upload for ${channelArg}`);
-  console.log(`▶ Uploading file: ${videoPath}`);
-
-  description = pickNextDescription(channelArg, descriptions);
-  uploadTitle = nextReelLabel(channelArg);
-
-  await uploader.initialize();
-  const newVideoId = uploader.getCurrentVideoId();
-  if (!newVideoId) throw new Error("Initialize succeeded but videoId missing.");
-
-  setPending(channelArg, newVideoId);
-  await uploader.uploadVideo(videoPath);
-}
-
-await uploader.waitUntilReady({ maxWaitMs: 600_000, intervalMs: 60_000 });
-
-const result = await uploader.publishReel({ title: uploadTitle, description });
-
-  if (result.post_id) {
-    console.log(`✅ Published. post_id=${result.post_id}`);
-    clearPending(channelArg);
-
-    if (videoPath) {
-      const dir = path.dirname(videoPath);
-      const base = path.basename(videoPath);
-      const dest = path.join(dir, `doneandsent_${base}`);
-      fs.renameSync(videoPath, dest);
-      console.log(`✅ Renamed to ${dest}\n`);
+    // Keep behaviour same as your file (advance description/title even on resume).
+    description = pickNextDescription(channelArg, descriptions);
+    uploadTitle = nextReelLabel(channelArg);
+  } else {
+    videoPath = getNextVideo(channel.folder);
+    if (!videoPath) {
+      console.log(`⚠️ No videos found in ${channel.folder}`);
+      return;
     }
 
+    console.log(`\n▶ Starting new REEL upload for ${channelArg}`);
+    console.log(`▶ Uploading file: ${videoPath}`);
+
+    description = pickNextDescription(channelArg, descriptions);
+    uploadTitle = nextReelLabel(channelArg);
+
+    await uploader.initialize();
+    const newVideoId = uploader.getCurrentVideoId();
+    if (!newVideoId) throw new Error("Initialize succeeded but videoId missing.");
+
+    setPending(channelArg, newVideoId);
+    await uploader.uploadVideo(videoPath);
+  }
+
+  await uploader.waitUntilReady({ maxWaitMs: 600_000, intervalMs: 60_000 });
+  const result = await uploader.publishReel({ title: uploadTitle, description });
+
+  if (result.post_id) {
+    console.log(`Published. post_id=${result.post_id}`);
+    clearPending(channelArg);
+
+    if (videoPath) markDone(videoPath);
     return;
   }
 
-  console.warn("⚠️ Publish succeeded but no post_id. Keeping pending ID.\n");
+  console.warn("Publish succeeded but no post_id. Keeping pending ID.\n");
 }
 
 if (require.main === module) {

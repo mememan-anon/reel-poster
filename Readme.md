@@ -6,5 +6,5 @@ pm2 stop reel-scheduler
 pm2 delete reel-scheduler
 pm2 save
 <!-- runninf each independently -->
-npx ts-node run.ts channel1
-npx ts-node run.ts channel2
+npx ts-node run.ts petsPage
+npx ts-node run.ts comedyPage

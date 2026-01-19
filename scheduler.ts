@@ -8,41 +8,80 @@ import { MAX_REELS } from "./config";
 const TZ_PHILIPPINES = "Asia/Manila";
 const COUNTER_FILE = path.join(__dirname, "daily_counters.json");
 
-async function postOneReel(channel: "channel1" | "channel2") {
+const MAX_PHOTOS = 12;
+
+type ReelChannel = "petsPage" | "comedyPage";
+type PhotoChannel = "coreMemes" | "petMemes" | "coupleMemes";
+type Channel = ReelChannel | PhotoChannel;
+
+async function postOne(channel: Channel) {
   console.log(`\n=== Starting post for ${channel} ===`);
   process.argv[2] = channel;
   await runInternal();
   console.log(`=== Finished post for ${channel} ===\n`);
 }
 
-function loadCounters() {
-  if (!fs.existsSync(COUNTER_FILE)) {
-    return { date: "", channel1: 0, channel2: 0 };
-  }
+async function safePost(channel: Channel): Promise<boolean> {
   try {
-    return JSON.parse(fs.readFileSync(COUNTER_FILE, "utf8"));
-  } catch {
-    // Corrupt file fallback
-    return { date: "", channel1: 0, channel2: 0 };
+    await postOne(channel);
+    return true;
+  } catch (e) {
+    console.error(`Post failed for ${channel}:`, e);
+    return false;
   }
 }
 
-function saveCounters(counters: any) {
+type Counters = {
+  date: string;
+  // reels
+  petsPage: number;
+  comedyPage: number;
+  // photos (per-page counts)
+  coreMemes: number;
+  petMemes: number;
+  coupleMemes: number;
+};
+
+function defaultCounters(): Counters {
+  return {
+    date: "",
+    petsPage: 0,
+    comedyPage: 0,
+    coreMemes: 0,
+    petMemes: 0,
+    coupleMemes: 0,
+  };
+}
+
+function loadCounters(): Counters {
+  if (!fs.existsSync(COUNTER_FILE)) return defaultCounters();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(COUNTER_FILE, "utf8"));
+    return { ...defaultCounters(), ...parsed } as Counters;
+  } catch {
+    return defaultCounters();
+  }
+}
+
+function saveCounters(counters: Counters) {
   fs.writeFileSync(COUNTER_FILE, JSON.stringify(counters, null, 2));
 }
 
-function isPostingHour(hour: number) {
-  //return hour >= 8 && hour <= 19; --posting every hour
-  return hour >= 8 && hour <= 18 && hour % 2 === 0; // posting every 2 hours
+// Reels: 6/day (every 2 hours) in 08..18 window
+function isReelPostingHour(hour: number) {
+  return hour >= 8 && hour <= 18 && hour % 2 === 0;
+}
+
+// Photos: 12/day (every hour) in 08..19 window
+function isPhotoPostingHour(hour: number) {
+  // return hour >= 8 && hour <= 19;
+   return hour >= 8 && hour <= 21;
 }
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Get YYYY-MM-DD in Manila time (NOT UTC)
- */
 function getManilaDate(now: Date): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ_PHILIPPINES,
@@ -52,9 +91,6 @@ function getManilaDate(now: Date): string {
   }).format(now);
 }
 
-/**
- * For clear debugging: show raw/local, ISO(UTC), and Manila time.
- */
 function getManilaTimestamp(now: Date): string {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: TZ_PHILIPPINES,
@@ -68,9 +104,6 @@ function getManilaTimestamp(now: Date): string {
   }).format(now);
 }
 
-/**
- * Get Manila hour/minute reliably (do not trust server timezone formatting)
- */
 function getManilaParts(now: Date): { hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: TZ_PHILIPPINES,
@@ -81,7 +114,6 @@ function getManilaParts(now: Date): { hour: number; minute: number } {
 
   const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "NaN");
   const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "NaN");
-
   return { hour, minute };
 }
 
@@ -95,9 +127,6 @@ async function main() {
     `Scheduler tick raw="${now.toString()}" iso="${now.toISOString()}" manila="${manilaStamp}" (hour=${hour}, minute=${minute})`
   );
 
-  // IMPORTANT FIX:
-  // If PM2 starts the process manually (pm2 start/restart), it will run immediately.
-  // We only want to post on the top of the hour to match cron_restart "0 * * * *".
   if (minute !== 0) {
     console.log("Not top of hour (minute != 0). Exiting without posting.");
     return;
@@ -105,45 +134,59 @@ async function main() {
 
   let counters = loadCounters();
 
-  // IMPORTANT FIX: reset counters based on Manila-local date (not UTC)
+  // Reset counters based on Manila-local date
   if (counters.date !== today) {
-    counters = { date: today, channel1: 0, channel2: 0 };
+    counters = { ...defaultCounters(), date: today };
     saveCounters(counters);
     console.log(`New Manila day detected (${today}). Counters reset.`);
   }
 
-  if (!isPostingHour(hour)) {
-    console.log(`Outside posting hours in Manila.Skipping.`);
+  // --- PHOTOS: independent hourly schedule, 12/day per page ---
+  if (isPhotoPostingHour(hour)) {
+    for (const ch of ["coreMemes", "petMemes", "coupleMemes"] as const) {
+      if (counters[ch] >= MAX_PHOTOS) {
+        console.log(`${ch} daily limit reached (${MAX_PHOTOS}). Skipping ${ch}.`);
+        continue;
+      }
+
+      const ok = await safePost(ch);
+      if (ok) {
+        counters[ch]++;
+        saveCounters(counters);
+      }
+    }
+  } else {
+    console.log(`Outside PHOTO posting hours in Manila. Skipping photos.`);
+  }
+
+  // --- REELS: separate schedule, 6/day, does NOT block photos if it fails ---
+  if (!isReelPostingHour(hour)) {
+    console.log(`Outside REEL posting hours in Manila. Skipping reels.`);
     return;
   }
 
-  if (counters.channel1 < MAX_REELS) {
-    await postOneReel("channel1");
-    counters.channel1++;
-    saveCounters(counters);
+  // petsPage reel
+  if (counters.petsPage < MAX_REELS) {
+    const ok = await safePost("petsPage");
+    if (ok) {
+      counters.petsPage++;
+      saveCounters(counters);
+    }
   } else {
-    console.log("Channel1 daily limit reached. Skipping channel1.");
+    console.log("petsPage daily limit reached. Skipping petsPage.");
   }
 
-  console.log("Waiting 10 minutes before posting channel2…");
+  console.log("Waiting 10 minutes before posting comedyPage…");
   await sleep(10 * 60 * 1000);
 
-  // Recompute time after sleep (optional safety)
-  const afterSleep = new Date();
-  const afterParts = getManilaParts(afterSleep);
-  if (!isPostingHour(afterParts.hour)) {
-    console.log(
-      `After sleep, now outside posting hours (hour=${afterParts.hour}). Skipping channel2.`
-    );
-    return;
-  }
-
-  if (counters.channel2 < MAX_REELS) {
-    await postOneReel("channel2");
-    counters.channel2++;
-    saveCounters(counters);
+  if (counters.comedyPage < MAX_REELS) {
+    const ok = await safePost("comedyPage");
+    if (ok) {
+      counters.comedyPage++;
+      saveCounters(counters);
+    }
   } else {
-    console.log("Channel2 daily limit reached. Skipping channel2.");
+    console.log("comedyPage daily limit reached. Skipping comedyPage.");
   }
 }
 
