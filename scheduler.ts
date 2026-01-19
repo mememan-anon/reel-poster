@@ -74,8 +74,7 @@ function isReelPostingHour(hour: number) {
 
 // Photos: 12/day (every hour) in 08..19 window
 function isPhotoPostingHour(hour: number) {
-  // return hour >= 8 && hour <= 19;
-   return hour >= 8 && hour <= 21;
+  return hour >= 8 && hour <= 19;
 }
 
 function sleep(ms: number) {
