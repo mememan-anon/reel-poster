@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import dotenv from "dotenv";
 import { ReelUpload } from "./ReelUpload";
 import { PhotoUpload } from "./photoUpload";
@@ -125,10 +126,61 @@ function getNextPhoto(folder: string): string | null {
   return files.length ? path.join(folder, files[0]) : null;
 }
 
+const MAX_FILENAME_BYTES = 240;
+
+function byteLength(input: string): number {
+  return Buffer.byteLength(input, "utf8");
+}
+
+function truncateToBytes(input: string, maxBytes: number): string {
+  if (byteLength(input) <= maxBytes) return input;
+  let out = "";
+  for (const ch of input) {
+    const next = out + ch;
+    if (byteLength(next) > maxBytes) break;
+    out = next;
+  }
+  return out;
+}
+
+function makeDoneBasename(originalBase: string): string {
+  const prefix = "doneandsent_";
+  const parsed = path.parse(originalBase);
+  const ext = parsed.ext;
+  const name = parsed.name;
+
+  const raw = `${prefix}${originalBase}`;
+  if (byteLength(raw) <= MAX_FILENAME_BYTES) return raw;
+
+  const hash = createHash("sha1").update(originalBase).digest("hex").slice(0, 8);
+  const joiner = "__";
+  const budget =
+    MAX_FILENAME_BYTES -
+    byteLength(prefix) -
+    byteLength(joiner) -
+    byteLength(hash) -
+    byteLength(ext);
+
+  const safeName = budget > 0 ? truncateToBytes(name, budget) : "";
+  const shortened = `${prefix}${safeName}${joiner}${hash}${ext}`;
+
+  if (byteLength(shortened) <= MAX_FILENAME_BYTES) return shortened;
+  return `${prefix}${hash}${ext}`;
+}
+
 function markDone(filePath: string) {
   const dir = path.dirname(filePath);
   const base = path.basename(filePath);
-  const dest = path.join(dir, `doneandsent_${base}`);
+  let destBase = makeDoneBasename(base);
+  let dest = path.join(dir, destBase);
+
+  if (fs.existsSync(dest)) {
+    const ts = new Date().toISOString().replace(/[:.]/g, "");
+    const parsed = path.parse(destBase);
+    destBase = `${parsed.name}_${ts}${parsed.ext}`;
+    dest = path.join(dir, destBase);
+  }
+
   fs.renameSync(filePath, dest);
   console.log(`✅ Renamed to ${dest}\n`);
 }
