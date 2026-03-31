@@ -14,17 +14,17 @@ type ReelChannel = "petsPage" | "comedyPage";
 type PhotoChannel = "coreMemes" | "petMemes" | "coupleMemes";
 type Channel = ReelChannel | PhotoChannel;
 
-async function postOne(channel: Channel) {
+async function postOne(channel: Channel): Promise<boolean> {
   console.log(`\n=== Starting post for ${channel} ===`);
   process.argv[2] = channel;
-  await runInternal();
+  const posted = await runInternal();
   console.log(`=== Finished post for ${channel} ===\n`);
+  return posted;
 }
 
 async function safePost(channel: Channel): Promise<boolean> {
   try {
-    await postOne(channel);
-    return true;
+    return await postOne(channel);
   } catch (e) {
     console.error(`Post failed for ${channel}:`, e);
     return false;

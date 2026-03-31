@@ -168,7 +168,12 @@ function makeDoneBasename(originalBase: string): string {
   return `${prefix}${hash}${ext}`;
 }
 
-function markDone(filePath: string) {
+function markDone(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    console.warn(`⚠️ File already missing, skipping rename: ${filePath}\n`);
+    return false;
+  }
+
   const dir = path.dirname(filePath);
   const base = path.basename(filePath);
   let destBase = makeDoneBasename(base);
@@ -183,6 +188,7 @@ function markDone(filePath: string) {
 
   fs.renameSync(filePath, dest);
   console.log(`✅ Renamed to ${dest}\n`);
+  return true;
 }
 
 const CHANNELS: Record<
@@ -231,7 +237,7 @@ const CHANNELS: Record<
   },
 };
 
-export async function main() {
+export async function main(): Promise<boolean> {
   const channelArg = process.argv[2] as ChannelKey;
 
   if (!channelArg || !CHANNELS[channelArg]) {
@@ -242,7 +248,7 @@ export async function main() {
     console.log("  npx ts-node run.ts coreMemes      # photos");
     console.log("  npx ts-node run.ts petMemes      # photos");
     console.log("  npx ts-node run.ts coupleMemes       # photos");
-    return;
+    return false;
   }
 
   const channel = CHANNELS[channelArg];
@@ -252,7 +258,7 @@ export async function main() {
     const photoPath = getNextPhoto(channel.folder);
     if (!photoPath) {
       console.log(`⚠️ No photos found in ${channel.folder}`);
-      return;
+      return false;
     }
 
     console.log(`\n▶ Uploading PHOTO for ${channelArg}`);
@@ -263,17 +269,24 @@ export async function main() {
       pageId: channel.pageId,
     });
 
-    // Always one photo at a go; no caption/description unless you pass it (we don't).
-    const result = await uploader.uploadPhoto({ photoFile: photoPath, publish: true });
+    try {
+      // Always one photo at a go; no caption/description unless you pass it (we don't).
+      const result = await uploader.uploadPhoto({ photoFile: photoPath, publish: true });
 
-    if (result.post_id || result.id) {
-      console.log(`✅ Photo uploaded. post_id=${result.post_id ?? "N/A"} photo_id=${result.id ?? "N/A"}`);
-      markDone(photoPath);
-      return;
+      if (result.post_id || result.id) {
+        console.log(`✅ Photo uploaded. post_id=${result.post_id ?? "N/A"} photo_id=${result.id ?? "N/A"}`);
+        markDone(photoPath);
+        return true;
+      }
+
+      console.warn("⚠️ Photo upload returned no post_id/id. Marking file done to avoid retry.\n");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`⚠️ Photo upload failed. Marking file done to avoid retry.\n${message}\n`);
     }
 
-    console.warn("⚠️ Upload succeeded but no post_id/id returned. Not renaming.\n");
-    return;
+    markDone(photoPath);
+    return false;
   }
 
   // REELS
@@ -292,48 +305,60 @@ export async function main() {
   let uploadTitle: string;
   let videoPath: string | null = null;
 
-  if (pendingVideoId) {
-    console.log(`\n▶ Resuming pending REEL upload for ${channelArg}`);
-    console.log(`▶ Using existing video_id: ${pendingVideoId}`);
+  try {
+    if (pendingVideoId) {
+      console.log(`\n▶ Resuming pending REEL upload for ${channelArg}`);
+      console.log(`▶ Using existing video_id: ${pendingVideoId}`);
 
-    uploader.setVideoId(pendingVideoId);
+      uploader.setVideoId(pendingVideoId);
 
-    // Keep behaviour same as your file (advance description/title even on resume).
-    description = pickNextDescription(channelArg, descriptions);
-    uploadTitle = nextReelLabel(channelArg);
-  } else {
-    videoPath = getNextVideo(channel.folder);
-    if (!videoPath) {
-      console.log(`⚠️ No videos found in ${channel.folder}`);
-      return;
+      // Keep behaviour same as your file (advance description/title even on resume).
+      description = pickNextDescription(channelArg, descriptions);
+      uploadTitle = nextReelLabel(channelArg);
+    } else {
+      videoPath = getNextVideo(channel.folder);
+      if (!videoPath) {
+        console.log(`⚠️ No videos found in ${channel.folder}`);
+        return false;
+      }
+
+      console.log(`\n▶ Starting new REEL upload for ${channelArg}`);
+      console.log(`▶ Uploading file: ${videoPath}`);
+
+      description = pickNextDescription(channelArg, descriptions);
+      uploadTitle = nextReelLabel(channelArg);
+
+      await uploader.initialize();
+      const newVideoId = uploader.getCurrentVideoId();
+      if (!newVideoId) throw new Error("Initialize succeeded but videoId missing.");
+
+      setPending(channelArg, newVideoId);
+      await uploader.uploadVideo(videoPath);
     }
 
-    console.log(`\n▶ Starting new REEL upload for ${channelArg}`);
-    console.log(`▶ Uploading file: ${videoPath}`);
+    await uploader.waitUntilReady({ maxWaitMs: 600_000, intervalMs: 60_000 });
+    const result = await uploader.publishReel({ title: uploadTitle, description });
 
-    description = pickNextDescription(channelArg, descriptions);
-    uploadTitle = nextReelLabel(channelArg);
+    if (result.post_id) {
+      console.log(`Published. post_id=${result.post_id}`);
+      clearPending(channelArg);
 
-    await uploader.initialize();
-    const newVideoId = uploader.getCurrentVideoId();
-    if (!newVideoId) throw new Error("Initialize succeeded but videoId missing.");
+      if (videoPath) markDone(videoPath);
+      return true;
+    }
 
-    setPending(channelArg, newVideoId);
-    await uploader.uploadVideo(videoPath);
-  }
-
-  await uploader.waitUntilReady({ maxWaitMs: 600_000, intervalMs: 60_000 });
-  const result = await uploader.publishReel({ title: uploadTitle, description });
-
-  if (result.post_id) {
-    console.log(`Published. post_id=${result.post_id}`);
+    console.warn("Publish succeeded but no post_id. Clearing pending ID and marking file done to avoid retry.\n");
+    clearPending(channelArg);
+    if (videoPath) markDone(videoPath);
+    return false;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`⚠️ Reel upload failed. Clearing pending state and marking file done to avoid retry.\n${message}\n`);
     clearPending(channelArg);
 
     if (videoPath) markDone(videoPath);
-    return;
+    return false;
   }
-
-  console.warn("Publish succeeded but no post_id. Keeping pending ID.\n");
 }
 
 if (require.main === module) {
